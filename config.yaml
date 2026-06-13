@@ -1,0 +1,51 @@
+global:
+  port: 3000
+
+rules:
+  - name: "community"
+    description: "Only the game client may fetch community content"
+    conditions:
+      - field: path
+        operator: starts_with
+        value: "/community"
+      - field: user_agent
+        operator: not_equals
+        value: "Half-Life 2"
+    action: deny
+    message: "Forbidden"
+    status: 403
+
+  - name: "block-source-files"
+    description: "Never serve plugin source files"
+    conditions:
+      - field: ext
+        operator: in
+        value: [".inc", ".sp", ".smx", ".cfg"]
+    action: deny
+    message: "Forbidden"
+    status: 403
+
+  - name: "cloudflare-only"
+    description: "Block all requests that do not arrive through Cloudflare"
+    conditions:
+      - field: peer_ip
+        operator: not_in
+        value:
+          - "173.245.48.0/20"
+          - "103.21.244.0/22"
+          - "103.22.200.0/22"
+          - "103.31.4.0/22"
+          - "141.101.64.0/18"
+          - "108.162.192.0/18"
+          - "190.93.240.0/20"
+          - "188.114.96.0/20"
+          - "197.234.240.0/22"
+          - "198.41.128.0/17"
+          - "162.158.0.0/15"
+          - "104.16.0.0/13"
+          - "104.24.0.0/14"
+          - "172.64.0.0/13"
+          - "131.0.72.0/22"
+    action: deny
+    message: "Forbidden"
+    status: 403

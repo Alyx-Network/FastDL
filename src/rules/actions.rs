@@ -2,7 +2,7 @@ use axum::http::{header, HeaderMap};
 
 use super::conditions::{evaluate_node, normalize_operator};
 use super::Facts;
-use crate::config::{Access, Rule};
+use crate::config::{Access, RegexCache, Rule};
 
 pub enum Decision {
     Continue,
@@ -10,7 +10,7 @@ pub enum Decision {
     Deny { status: u16, message: String, rule: String },
 }
 
-pub fn apply(rule: &Rule, facts: &Facts, headers: &HeaderMap) -> Decision {
+pub fn apply(rule: &Rule, regexes: &RegexCache, facts: &Facts, headers: &HeaderMap) -> Decision {
     match normalize_operator(&rule.action).as_str() {
         "deny" | "block" => Decision::Deny {
             status: rule.status.unwrap_or(403),
@@ -18,7 +18,7 @@ pub fn apply(rule: &Rule, facts: &Facts, headers: &HeaderMap) -> Decision {
             rule: rule.name.clone(),
         },
         "allow" => Decision::Allow,
-        "access" => match access_satisfied(rule.access.as_ref(), facts, headers) {
+        "access" => match access_satisfied(rule.access.as_ref(), regexes, facts, headers) {
             true => Decision::Continue,
             false => Decision::Deny {
                 status: rule.status.unwrap_or(401),
@@ -30,13 +30,13 @@ pub fn apply(rule: &Rule, facts: &Facts, headers: &HeaderMap) -> Decision {
     }
 }
 
-fn access_satisfied(access: Option<&Access>, facts: &Facts, headers: &HeaderMap) -> bool {
+fn access_satisfied(access: Option<&Access>, regexes: &RegexCache, facts: &Facts, headers: &HeaderMap) -> bool {
     let access = match access {
         Some(access) => access,
         None => return false,
     };
     bearer_satisfied(&access.bearer, headers)
-        || access.header.iter().any(|node| evaluate_node(node, facts, headers))
+        || access.header.iter().any(|node| evaluate_node(node, regexes, facts, headers))
 }
 
 fn bearer_satisfied(tokens: &[String], headers: &HeaderMap) -> bool {

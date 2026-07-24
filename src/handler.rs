@@ -19,11 +19,13 @@ use crate::rules::{process_rules, Decision, Facts};
 
 const DISABLED_EXTENSIONS: [&str; 3] = [".inc", ".sp", ".smx"];
 const COMPRESSIONS: [&str; 2] = [".bz2", ".gz"];
+const STREAM_CHUNK: usize = 1024 * 1024;
 
 #[derive(Clone)]
 pub struct AppState {
     pub config: Arc<ArcSwap<Config>>,
     pub storage_root: PathBuf,
+    pub auto_root: PathBuf,
 }
 
 pub async fn handle_request(
@@ -75,7 +77,7 @@ pub async fn handle_request(
         ip: client.clone(),
         peer_ip: normalize_ip(remote.ip().to_string()),
     };
-    if let Decision::Deny { status, message, rule } = process_rules(&config.rules, &facts, &headers) {
+    if let Decision::Deny { status, message, rule } = process_rules(&config.rules, &config.regexes, &facts, &headers) {
         let code = StatusCode::from_u16(status).unwrap_or(StatusCode::FORBIDDEN);
         tracing::warn!(client_ip = %client, path = %log_path, status, rule = %rule, reason = %message, "Blocked by rule [rule_blocked]");
         log_access(&client, &method, &log_path, status, 0, &user_agent, started.elapsed().as_millis());
@@ -99,14 +101,21 @@ pub async fn handle_request(
     }
 
     for compression in COMPRESSIONS {
-        let mut candidate = target.clone().into_os_string();
-        candidate.push(compression);
-        let candidate = PathBuf::from(candidate);
-        match tokio::fs::metadata(&candidate).await {
-            Ok(metadata) if metadata.is_file() => {
-                return serve_file(&candidate, metadata.len(), &headers, &client, &method, &log_path, &user_agent, head, started).await;
+        let candidate = append_extension(&target, compression);
+        if let Some(length) = file_size(&candidate).await {
+            return serve_file(&candidate, length, &headers, &client, &method, &log_path, &user_agent, head, started).await;
+        }
+    }
+
+    if let Some(candidate) = resolve_within(&state.auto_root, &url_path) {
+        if let Some(length) = file_size(&candidate).await {
+            return serve_file(&candidate, length, &headers, &client, &method, &log_path, &user_agent, head, started).await;
+        }
+        for compression in COMPRESSIONS {
+            let variant = append_extension(&candidate, compression);
+            if let Some(length) = file_size(&variant).await {
+                return serve_file(&variant, length, &headers, &client, &method, &log_path, &user_agent, head, started).await;
             }
-            _ => continue,
         }
     }
 
@@ -246,7 +255,7 @@ async fn build_file_response(
     if start > 0 {
         file.seek(std::io::SeekFrom::Start(start)).await?;
     }
-    let stream = ReaderStream::new(file.take(length));
+    let stream = ReaderStream::with_capacity(file.take(length), STREAM_CHUNK);
     let response = builder
         .body(Body::from_stream(stream))
         .map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error))?;
@@ -274,6 +283,19 @@ async fn read_directory(path: &Path) -> std::io::Result<Vec<DirectoryEntry>> {
         _ => first.name.cmp(&second.name),
     });
     Ok(items)
+}
+
+async fn file_size(path: &Path) -> Option<u64> {
+    match tokio::fs::metadata(path).await {
+        Ok(metadata) if metadata.is_file() => Some(metadata.len()),
+        _ => None,
+    }
+}
+
+fn append_extension(path: &Path, extension: &str) -> PathBuf {
+    let mut value = path.to_path_buf().into_os_string();
+    value.push(extension);
+    PathBuf::from(value)
 }
 
 fn resolve_within(storage_root: &Path, url_path: &str) -> Option<PathBuf> {

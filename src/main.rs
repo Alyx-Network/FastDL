@@ -4,6 +4,7 @@ use std::sync::Arc;
 use arc_swap::ArcSwap;
 use axum::Router;
 
+mod archive;
 mod config;
 mod directory;
 mod handler;
@@ -13,10 +14,13 @@ use crate::handler::{handle_request, AppState};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt().with_target(false).init();
+    let (writer, guard) = tracing_appender::non_blocking(std::io::stdout());
+    tracing_subscriber::fmt().with_target(false).with_writer(writer).init();
 
     std::fs::create_dir_all("storage")?;
+    std::fs::create_dir_all("auto")?;
     let storage_root = std::fs::canonicalize("storage")?;
+    let auto_root = std::fs::canonicalize("auto")?;
 
     let config = Arc::new(ArcSwap::from_pointee(config::load()));
     let watcher = config::watch(config.clone());
@@ -24,6 +28,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(_) => {}
         Err(error) => {
             tracing::warn!(error = %error, "Failed to start config watcher [config_watch_start_failed]")
+        }
+    }
+
+    let archive_storage = storage_root.clone();
+    let archive_auto = auto_root.clone();
+    tokio::task::spawn_blocking(move || match archive::generate_all(&archive_storage, &archive_auto) {
+        Ok(summary) => tracing::info!(files = summary.files, created = summary.created, skipped = summary.skipped, elapsed_ms = summary.elapsed_ms, "Generated archives [archives_generated]"),
+        Err(error) => tracing::warn!(error = %error, "Failed to generate archives [archives_failed]"),
+    });
+
+    let archive_watcher = archive::watch(storage_root.clone(), auto_root.clone());
+    match &archive_watcher {
+        Ok(_) => {}
+        Err(error) => {
+            tracing::warn!(error = %error, "Failed to start storage watcher [storage_watch_start_failed]")
         }
     }
 
@@ -38,6 +57,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state = AppState {
         config,
         storage_root: storage_root.clone(),
+        auto_root: auto_root.clone(),
     };
     let app = Router::new().fallback(handle_request).with_state(state);
 
@@ -51,5 +71,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?;
 
     drop(watcher);
+    drop(archive_watcher);
+    drop(guard);
     Ok(())
 }

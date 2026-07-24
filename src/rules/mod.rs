@@ -3,7 +3,7 @@ pub mod conditions;
 
 use axum::http::HeaderMap;
 
-use crate::config::Rule;
+use crate::config::{RegexCache, Rule};
 pub use actions::Decision;
 
 pub struct Facts {
@@ -15,12 +15,12 @@ pub struct Facts {
     pub peer_ip: String,
 }
 
-pub fn process_rules(rules: &[Rule], facts: &Facts, headers: &HeaderMap) -> Decision {
+pub fn process_rules(rules: &[Rule], regexes: &RegexCache, facts: &Facts, headers: &HeaderMap) -> Decision {
     for rule in rules {
-        if !conditions::evaluate_all(&rule.conditions, facts, headers) {
+        if !conditions::evaluate_all(&rule.conditions, regexes, facts, headers) {
             continue;
         }
-        match actions::apply(rule, facts, headers) {
+        match actions::apply(rule, regexes, facts, headers) {
             Decision::Continue => continue,
             decision => return decision,
         }

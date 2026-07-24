@@ -5,24 +5,24 @@ use ipnet::IpNet;
 use regex::Regex;
 
 use super::Facts;
-use crate::config::{ConditionNode, Value};
+use crate::config::{ConditionNode, RegexCache, Value};
 
 pub fn normalize_operator(operator: &str) -> String {
     operator.to_lowercase().replace('_', "")
 }
 
-pub fn evaluate_all(nodes: &[ConditionNode], facts: &Facts, headers: &HeaderMap) -> bool {
-    nodes.iter().all(|node| evaluate_node(node, facts, headers))
+pub fn evaluate_all(nodes: &[ConditionNode], regexes: &RegexCache, facts: &Facts, headers: &HeaderMap) -> bool {
+    nodes.iter().all(|node| evaluate_node(node, regexes, facts, headers))
 }
 
-pub fn evaluate_node(node: &ConditionNode, facts: &Facts, headers: &HeaderMap) -> bool {
+pub fn evaluate_node(node: &ConditionNode, regexes: &RegexCache, facts: &Facts, headers: &HeaderMap) -> bool {
     if let Some(children) = &node.and {
-        return children.iter().all(|child| evaluate_node(child, facts, headers));
+        return children.iter().all(|child| evaluate_node(child, regexes, facts, headers));
     }
     if let Some(children) = &node.or {
-        return children.iter().any(|child| evaluate_node(child, facts, headers));
+        return children.iter().any(|child| evaluate_node(child, regexes, facts, headers));
     }
-    evaluate_leaf(node, facts, headers)
+    evaluate_leaf(node, regexes, facts, headers)
 }
 
 fn field_value(field: &str, facts: &Facts, headers: &HeaderMap) -> String {
@@ -76,7 +76,7 @@ fn ip_matches(client: &str, pattern: &str) -> bool {
     }
 }
 
-fn evaluate_leaf(node: &ConditionNode, facts: &Facts, headers: &HeaderMap) -> bool {
+fn evaluate_leaf(node: &ConditionNode, regexes: &RegexCache, facts: &Facts, headers: &HeaderMap) -> bool {
     let field = match &node.field {
         Some(field) => field.as_str(),
         None => return false,
@@ -99,10 +99,13 @@ fn evaluate_leaf(node: &ConditionNode, facts: &Facts, headers: &HeaderMap) -> bo
         "startswith" => value_text(&node.value).map(|text| resolved.starts_with(text)).unwrap_or(false),
         "endswith" => value_text(&node.value).map(|text| resolved.ends_with(text)).unwrap_or(false),
         "contains" => value_text(&node.value).map(|text| resolved.contains(text)).unwrap_or(false),
-        "matches" => value_text(&node.value)
-            .and_then(|text| Regex::new(text).ok())
-            .map(|regex| regex.is_match(&resolved))
-            .unwrap_or(false),
+        "matches" => match value_text(&node.value) {
+            Some(text) => match regexes.get(text) {
+                Some(regex) => regex.is_match(&resolved),
+                None => Regex::new(text).map(|regex| regex.is_match(&resolved)).unwrap_or(false),
+            },
+            None => false,
+        },
         "in" => match is_ip {
             true => value_list(&node.value).map(|list| list.iter().any(|item| ip_matches(&resolved, item))).unwrap_or(false),
             false => value_list(&node.value).map(|list| list.iter().any(|item| item == &resolved)).unwrap_or(false),

@@ -14,8 +14,7 @@ use crate::handler::{handle_request, AppState};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let (writer, guard) = tracing_appender::non_blocking(std::io::stdout());
-    tracing_subscriber::fmt().with_target(false).with_writer(writer).init();
+    tracing_subscriber::fmt().with_target(false).init();
 
     std::fs::create_dir_all("storage")?;
     std::fs::create_dir_all("auto")?;
@@ -72,6 +71,5 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     drop(watcher);
     drop(archive_watcher);
-    drop(guard);
     Ok(())
 }
